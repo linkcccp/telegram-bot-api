@@ -36,13 +36,12 @@ jobs:
     steps:
       - name: Setup QEMU (arm64 模拟)
         if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Checkout (含 td 子模块)
         uses: actions/checkout@v7
         with:
           submodules: recursive
-          submodule-depth: 1
 
       - name: Build in debian:12 (${{ matrix.arch }})
         run: |
@@ -63,7 +62,7 @@ jobs:
           install -m 0755 build/telegram-bot-api "$RUNNER_TEMP/${{ matrix.asset }}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tba-${{ matrix.arch }}
           path: ${{ runner.temp }}/${{ matrix.asset }}
@@ -88,7 +87,7 @@ jobs:
           fi
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: tba-*
           merge-multiple: true
