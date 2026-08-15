@@ -1,0 +1,65 @@
+# ============================================================
+# 自动同步上游（tdlib/telegram-bot-api）并触发构建，无人值守
+#   1) 定时（每 30 分钟）拉取上游 master
+#   2) 有更新 → 合并进本仓库 master → 推送
+#   3) 自动打 tba-v<时间> tag → 触发 build-tba.yml（workflow_dispatch）
+# 说明：GITHUB_TOKEN 推送的事件不会自动触发 push:tags 工作流，
+#       因此这里用 gh workflow run 显式触发 build-tba.yml。
+# ============================================================
+name: Auto-sync upstream
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '即使无上游更新也强制重建'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (完整历史)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Sync & tag & trigger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/tdlib/telegram-bot-api.git
+          git fetch upstream master
+
+          BEHIND="$(git rev-list --count HEAD..upstream/master)"
+          HAS_TAG="$(git tag -l 'tba-v*' | wc -l)"
+
+          if [[ "$BEHIND" -eq 0 && "$HAS_TAG" -gt 0 && "$FORCE" != "true" ]]; then
+            echo "上游无更新，跳过。"
+            exit 0
+          fi
+
+          if [[ "$BEHIND" -gt 0 ]]; then
+            echo "上游有 ${BEHIND} 个新提交，合并进 master…"
+            git merge upstream/master --no-edit
+            git push origin master
+          fi
+
+          VERSION="tba-v$(date -u +%Y.%m.%d.%H%M%S)"
+          echo "打 tag：${VERSION}"
+          git tag "$VERSION"
+          git push origin "$VERSION"
+
+          echo "触发构建：build-tba.yml version=${VERSION}"
+          gh workflow run build-tba.yml --ref master -f version="$VERSION"

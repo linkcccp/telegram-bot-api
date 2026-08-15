@@ -1,0 +1,117 @@
+# ============================================================
+# 构建 telegram-bot-api（x86_64 + arm64）并发布到 GitHub Release
+# 触发：
+#   1) 手动 workflow_dispatch（可传 version，缺省自动生成 tba-v<时间>）
+#   2) 推送 tba-v* tag
+# 产物：telegram-bot-api-linux-x64 / telegram-bot-api-linux-arm64
+# 构建环境固定 debian:12（glibc 2.36），供 tgdl-bot 的 debian:12-slim 运行容器使用。
+# ============================================================
+name: Build telegram-bot-api
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release 版本（形如 tba-v1.0.0，留空则自动生成）'
+        required: false
+        default: ''
+  push:
+    tags:
+      - 'tba-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            asset: telegram-bot-api-linux-x64
+          - arch: arm64
+            asset: telegram-bot-api-linux-arm64
+    steps:
+      - name: Setup QEMU (arm64 模拟)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Checkout (含 td 子模块)
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          submodule-depth: 1
+
+      - name: Build in debian:12 (${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          docker run --rm --platform linux/${{ matrix.arch }} \
+            -v "$GITHUB_WORKSPACE":/workspace \
+            -w /workspace \
+            debian:12 bash -c '
+              set -euo pipefail
+              apt-get update -qq
+              apt-get install -y -qq build-essential cmake gperf git libssl-dev zlib1g-dev pkg-config
+              mkdir -p build
+              cd build
+              cmake -DCMAKE_BUILD_TYPE=Release ..
+              cmake --build . -j"$(nproc)"
+              test -x ./telegram-bot-api
+            '
+          install -m 0755 build/telegram-bot-api "$RUNNER_TEMP/${{ matrix.asset }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tba-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: ver
+        env:
+          REF: ${{ github.ref_name }}
+          INPUT: ${{ inputs.version }}
+        run: |
+          if [[ -n "$INPUT" ]]; then
+            echo "version=$INPUT" >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" != "" ]]; then
+            echo "version=$REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=tba-v$(date -u +%Y.%m.%d.%H%M%S)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tba-*
+          merge-multiple: true
+          path: assets
+
+      - name: Sanity check
+        run: |
+          set -euo pipefail
+          ls -la assets/
+          test -s assets/telegram-bot-api-linux-x64
+          test -s assets/telegram-bot-api-linux-arm64
+          head -c4 assets/telegram-bot-api-linux-x64 | od -An -tx1 | grep -q '7f 45 4c 46' || { echo "x64 非 ELF"; exit 1; }
+          head -c4 assets/telegram-bot-api-linux-arm64 | od -An -tx1 | grep -q '7f 45 4c 46' || { echo "arm64 非 ELF"; exit 1; }
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: telegram-bot-api ${{ steps.ver.outputs.version }}
+          body: |
+            预编译二进制（debian:12 内构建）：
+            - `telegram-bot-api-linux-x64`
+            - `telegram-bot-api-linux-arm64`
+          files: |
+            assets/telegram-bot-api-linux-x64
+            assets/telegram-bot-api-linux-arm64
