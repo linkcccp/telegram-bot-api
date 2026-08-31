@@ -1,6 +1,6 @@
 # ============================================================
 # 自动同步上游（tdlib/telegram-bot-api）并触发构建，无人值守
-#   1) 定时（每 30 分钟）拉取上游 master
+#   1) 定时（每天北京时间 05:00，即 UTC 21:00）拉取上游 master
 #   2) 有更新 → 合并进本仓库 master → 推送
 #   3) 自动打 tba-v<时间> tag → 触发 build-tba.yml（workflow_dispatch）
 # 说明：GITHUB_TOKEN 推送的事件不会自动触发 push:tags 工作流，
@@ -10,7 +10,7 @@ name: Auto-sync upstream
 
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '0 21 * * *'
   workflow_dispatch:
     inputs:
       force:
@@ -62,4 +62,4 @@ jobs:
           git push origin "$VERSION"
 
           echo "触发构建：build-tba.yml version=${VERSION}"
-          gh workflow run build-tba.yml --ref master -f version="$VERSION"
+          gh workflow run build-tba.yml --repo "${{ github.repository }}" --ref master -f version="$VERSION"
